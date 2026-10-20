@@ -14,13 +14,14 @@ from typing import Optional
 
 from .connection import get_connection
 from ..models.configuracao import Configuracao
+from ..models.estatistica import EstatisticaProjeto
 from ..models.projeto import Projeto
 from ..models.sessao import Sessao, TipoSessao
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# =========================================================================
 #  PROJETOS
-# ═══════════════════════════════════════════════════════════════════════════════
+# =========================================================================
 
 def criar_projeto(
     nome: str,
@@ -99,9 +100,9 @@ def deletar_projeto(projeto_id: int) -> bool:
     return cursor.rowcount > 0
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# =========================================================================
 #  SESSÕES
-# ═══════════════════════════════════════════════════════════════════════════════
+# =========================================================================
 
 def registrar_sessao(
     duracao_minutos: int,
@@ -174,9 +175,9 @@ def listar_sessoes(
     return [Sessao.from_row(r) for r in rows]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# =========================================================================
 #  CONFIGURAÇÕES
-# ═══════════════════════════════════════════════════════════════════════════════
+# =========================================================================
 
 def ler_configuracao() -> Configuracao:
     """
@@ -238,3 +239,74 @@ def atualizar_configuracao(
         conn.commit()
 
     return ler_configuracao()
+
+
+# =========================================================================
+#  ESTATISTICAS E RELATORIOS
+# =========================================================================
+
+def obter_estatisticas_projetos() -> list[EstatisticaProjeto]:
+    """
+    Retorna estatisticas agregadas de todos os projetos cadastrados.
+
+    Executa um LEFT JOIN entre Projetos e Sessoes (filtrando por tipo='foco')
+    para somar pomodoros realizados e duracao total em minutos por projeto.
+
+    Returns:
+        Lista de EstatisticaProjeto com os dados agregados.
+    """
+    sql = """
+        SELECT 
+            p.id,
+            p.nome,
+            p.categoria,
+            p.pomodoros_estimados,
+            COUNT(s.id) AS pomodoros_realizados,
+            COALESCE(SUM(s.duracao_minutos), 0) AS tempo_foco_minutos
+        FROM projetos p
+        LEFT JOIN sessoes s 
+            ON p.id = s.projeto_id 
+           AND s.tipo = 'foco'
+        GROUP BY p.id, p.nome, p.categoria, p.pomodoros_estimados
+        ORDER BY p.id
+    """
+    with get_connection() as conn:
+        rows = conn.execute(sql).fetchall()
+    return [EstatisticaProjeto.from_row(r) for r in rows]
+
+
+def obter_resumo_estatisticas() -> dict[str, int]:
+    """
+    Retorna totais gerais consolidados do banco de dados.
+
+    Campos retornados:
+        total_projetos:         Numero de projetos cadastrados.
+        total_pomodoros:        Total geral de sessoes de foco realizadas.
+        tempo_foco_minutos:     Soma de minutos de foco (com e sem projeto).
+        pomodoros_sem_projeto:  Sessoes de foco realizadas sem projeto vinculado.
+    """
+    sql_totais = """
+        SELECT 
+            COUNT(id) AS total_pomodoros,
+            COALESCE(SUM(duracao_minutos), 0) AS tempo_foco_minutos
+        FROM sessoes
+        WHERE tipo = 'foco'
+    """
+    sql_sem_projeto = """
+        SELECT COUNT(id) AS qtd
+        FROM sessoes
+        WHERE tipo = 'foco' AND projeto_id IS NULL
+    """
+    sql_projetos = "SELECT COUNT(id) AS qtd FROM projetos"
+
+    with get_connection() as conn:
+        totais = conn.execute(sql_totais).fetchone()
+        sem_proj = conn.execute(sql_sem_projeto).fetchone()
+        projs = conn.execute(sql_projetos).fetchone()
+
+    return {
+        "total_projetos": projs["qtd"] if projs else 0,
+        "total_pomodoros": totais["total_pomodoros"] if totais else 0,
+        "tempo_foco_minutos": totais["tempo_foco_minutos"] if totais else 0,
+        "pomodoros_sem_projeto": sem_proj["qtd"] if sem_proj else 0,
+    }

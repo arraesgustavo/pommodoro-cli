@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: pommo
+Version: 0.1.0
+Summary: Cyberpunk Pomodoro CLI para o terminal
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: rich>=13.0
+
+# pommodoro-cli

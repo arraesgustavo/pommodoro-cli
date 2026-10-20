@@ -1,0 +1,2 @@
+[console_scripts]
+pommo = pommo.cli:main

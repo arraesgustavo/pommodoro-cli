@@ -1,6 +1,6 @@
 """
 pommo/database/connection.py
-────────────────────────────
+----------------------------
 Gerencia a conexão SQLite e inicializa o schema do banco de dados.
 O arquivo do banco fica em ~/.local/share/pommo/pommo.db (XDG-compliant).
 """

@@ -232,7 +232,8 @@ class PomodoroEngine:
         e decide o proximo estado com base na configuracao.
         """
         estado_concluido = self._state
-        duracao_min = self._segundos_para_estado(estado_concluido) // 60
+        seg_totais = self._segundos_para_estado(estado_concluido)
+        duracao_min = seg_totais // 60 if seg_totais >= 60 else (1 if seg_totais > 0 else 0)
         tipo = STATE_TO_TIPO.get(estado_concluido)
 
         # Incrementa contador ANTES de decidir proximo estado

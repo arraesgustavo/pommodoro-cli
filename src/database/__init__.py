@@ -1,6 +1,6 @@
 """
 pommo/database/__init__.py
-──────────────────────────
+--------------------------
 Re-exporta as funções públicas do módulo de banco de dados
 para que outros módulos possam importar de `pommo.database` diretamente.
 """
@@ -18,6 +18,9 @@ from .repository import (
     # Configurações
     ler_configuracao,
     atualizar_configuracao,
+    # Estatisticas
+    obter_estatisticas_projetos,
+    obter_resumo_estatisticas,
 )
 
 __all__ = [
@@ -31,4 +34,6 @@ __all__ = [
     "listar_sessoes",
     "ler_configuracao",
     "atualizar_configuracao",
+    "obter_estatisticas_projetos",
+    "obter_resumo_estatisticas",
 ]
