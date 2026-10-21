@@ -4,7 +4,7 @@ scripts/gerar_assets.py
 Gera os arquivos de audio placeholder usados pelo pommo.
 
 Cada som e um beep sintetico com frequencia e duracao distintas,
-produzido com o modulo padrao `wave` — sem dependencias externas.
+produzido com o modulo padrao `wave` - sem dependencias externas.
 
 Uso:
     python scripts/gerar_assets.py
@@ -16,8 +16,12 @@ import sys
 import wave
 from pathlib import Path
 
-# Diretorio de destino dos assets de audio
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "sounds"
+# Diretorio de destino dos assets de audio (raiz e pacote)
+_RAIZ = Path(__file__).resolve().parent.parent
+ASSETS_DIRS = [
+    _RAIZ / "assets" / "sounds",
+    _RAIZ / "src" / "assets" / "sounds",
+]
 
 # Definicoes de cada som gerado:
 # (nome_arquivo, frequencia_hz, duracao_s, amplitude_0_a_1, descricao)
@@ -91,15 +95,16 @@ def gerar_arquivo(
 
 
 def main() -> None:
-    ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Gerando assets em: {ASSETS_DIR}\n")
+    for diretorio in ASSETS_DIRS:
+        diretorio.mkdir(parents=True, exist_ok=True)
+        print(f"Gerando assets em: {diretorio}\n")
 
-    for nome, freq, dur, amp, desc in SONS:
-        destino = ASSETS_DIR / nome
-        gerar_arquivo(destino, freq, dur, amp)
-        print(f"  [OK] {nome:<28} {freq:>6.0f} Hz  {dur:.2f}s  -- {desc}")
+        for nome, freq, dur, amp, desc in SONS:
+            destino = diretorio / nome
+            gerar_arquivo(destino, freq, dur, amp)
+            print(f"  [OK] {nome:<28} {freq:>6.0f} Hz  {dur:.2f}s  - {desc}")
 
-    print(f"\nTotal: {len(SONS)} arquivo(s) gerado(s).")
+    print(f"\nTotal: {len(SONS)} arquivo(s) gerado(s) em cada diretorio.")
 
 
 if __name__ == "__main__":

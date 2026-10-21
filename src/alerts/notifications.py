@@ -26,6 +26,7 @@ Uso basico:
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -35,13 +36,40 @@ from ..timer.states import PomodoroState
 logger = logging.getLogger(__name__)
 
 # =========================================================================
-# Caminhos dos assets de audio
+# Caminhos dos assets de audio (resolucao absoluta via pathlib)
 # =========================================================================
 
-# Raiz do projeto: sobe 3 niveis a partir deste arquivo
-# src/alerts/notifications.py -> src/alerts -> src -> raiz
-_PROJETO_RAIZ = Path(__file__).resolve().parent.parent.parent
-ASSETS_DIR = _PROJETO_RAIZ / "assets" / "sounds"
+def _localizar_assets_dir() -> Path:
+    """
+    Localiza o diretorio de assets de audio usando pathlib.Path relativo a __file__.
+
+    Verifica de forma resiliente:
+      1. Dentro do pacote instalado (src/assets/sounds ou pomocli/assets/sounds)
+      2. Na raiz do repositorio do projeto (assets/sounds)
+      3. No diretorio XDG de dados do usuario (~/.local/share/pomocli/sounds)
+    """
+    # 1. Dentro da distribuicao do pacote: src/alerts/notifications.py -> src/assets/sounds
+    pkg_assets = Path(__file__).resolve().parent.parent / "assets" / "sounds"
+    if pkg_assets.is_dir() and any(pkg_assets.glob("*.wav")):
+        return pkg_assets
+
+    # 2. Na raiz do repositorio: ../../../assets/sounds
+    repo_assets = Path(__file__).resolve().parent.parent.parent / "assets" / "sounds"
+    if repo_assets.is_dir() and any(repo_assets.glob("*.wav")):
+        return repo_assets
+
+    # 3. No diretorio XDG padrao do usuario no Arch Linux
+    xdg_data = os.environ.get("XDG_DATA_HOME")
+    base_dir = Path(xdg_data) if xdg_data else (Path.home() / ".local" / "share")
+    for app_name in ("pomocli", "pommo", "pomohacker"):
+        user_assets = base_dir / app_name / "sounds"
+        if user_assets.is_dir() and any(user_assets.glob("*.wav")):
+            return user_assets
+
+    return pkg_assets
+
+
+ASSETS_DIR = _localizar_assets_dir()
 
 # Mapeamento estado -> arquivo de som
 _SOM_POR_ESTADO: dict[PomodoroState, list[Path]] = {

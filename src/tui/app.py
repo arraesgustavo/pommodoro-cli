@@ -113,16 +113,24 @@ def _ler_tecla_nao_bloqueante() -> Optional[str]:
     Verifica se ha caracteres prontos em sys.stdin sem bloquear a thread.
     Retorna o caractere em minusculo ou None.
     """
-    if not (HAS_TERMIOS and sys.stdin.isatty()):
-        return None
-
-    try:
-        r, _, _ = select.select([sys.stdin], [], [], 0)
-        if r:
-            ch = sys.stdin.read(1)
-            return ch.lower()
-    except Exception:
-        return None
+    if HAS_TERMIOS and sys.stdin.isatty():
+        try:
+            r, _, _ = select.select([sys.stdin], [], [], 0)
+            if r:
+                ch = sys.stdin.read(1)
+                return ch.lower()
+        except Exception:
+            return None
+    elif not sys.stdin.isatty():
+        # Em pipes ou testes nao-interativos, le caracteres ou encerra em EOF
+        try:
+            r, _, _ = select.select([sys.stdin], [], [], 0)
+            if r:
+                ch = sys.stdin.read(1)
+                return ch.lower() if ch else "q"
+            return "q"
+        except Exception:
+            return "q"
     return None
 
 

@@ -1,20 +1,41 @@
 """
 pommo/database/connection.py
 ----------------------------
-Gerencia a conexão SQLite e inicializa o schema do banco de dados.
-O arquivo do banco fica em ~/.local/share/pommo/pommo.db (XDG-compliant).
+Gerencia a conexao SQLite e inicializa o schema do banco de dados.
+O arquivo do banco fica em ~/.local/share/pomocli/pomocli.db (XDG-compliant).
 """
 
+import os
+import shutil
 import sqlite3
 from pathlib import Path
 
-# Localização do banco 
+
+# =========================================================================
+# Localizacao do banco
+# =========================================================================
 
 def _db_path() -> Path:
-    """Retorna o caminho absoluto do arquivo SQLite, criando o diretório se necessário."""
-    data_dir = Path.home() / ".local" / "share" / "pommo"
+    """
+    Retorna o caminho absoluto do arquivo SQLite, criando o diretorio se necessario.
+    Segue a especificacao XDG Base Directory para sistemas Linux/Arch.
+    Padrao: ~/.local/share/pomocli/pomocli.db
+    """
+    xdg_data = os.environ.get("XDG_DATA_HOME")
+    base_dir = Path(xdg_data) if xdg_data else (Path.home() / ".local" / "share")
+    data_dir = base_dir / "pomocli"
     data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir / "pommo.db"
+    db_file = data_dir / "pomocli.db"
+
+    # Migra dados legados (pommo.db) caso existam e o novo banco ainda nao exista
+    legacy_db = base_dir / "pommo" / "pommo.db"
+    if not db_file.exists() and legacy_db.exists():
+        try:
+            shutil.copy2(legacy_db, db_file)
+        except Exception:
+            pass
+
+    return db_file
 
 
 # Conexão 

@@ -3,19 +3,39 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pommo"
+name = "pomocli"
 version = "0.1.0"
-description = "Cyberpunk Pomodoro CLI para o terminal"
+description = "Cyberpunk Pomodoro CLI para terminal no Arch Linux"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+authors = [
+    { name = "Gustavo" }
+]
+keywords = ["pomodoro", "cli", "cyberpunk", "terminal", "tui", "rich", "archlinux"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Utilities",
+]
 dependencies = [
     "rich>=13.0",
 ]
 
 [project.scripts]
-pommo = "pommo.cli:main"
+pomocli = "src.cli:main"
+pommo = "src.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pommo*", "src*"]
+include = ["pomocli*", "pommo*", "src*"]
+
+[tool.setuptools.package-data]
+"*" = ["assets/sounds/*.wav"]

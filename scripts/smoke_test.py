@@ -24,7 +24,7 @@ from pommo.database import (
     atualizar_configuracao,
 )
 
-SEP = "─" * 50
+SEP = "-" * 50
 
 
 def secao(titulo: str) -> None:
