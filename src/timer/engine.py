@@ -57,10 +57,12 @@ class PomodoroEngine:
         projeto_id         - FK opcional para vincular sessoes ao projeto ativo.
 
     Atributos de leitura:
-        state              - estado atual (PomodoroState).
-        segundos_restantes - segundos restantes no ciclo atual.
-        ciclos_foco        - numero de sessoes de foco concluidas (0-3).
-        pausado            - True se o timer estiver pausado.
+        state                 - estado atual (PomodoroState).
+        segundos_restantes    - segundos restantes no ciclo atual.
+        ciclos_foco           - numero de sessoes de foco concluidas (0-3).
+        pausado               - True se o timer estiver pausado.
+        proximo_estado_pendente - proximo estado aguardando inicio manual
+                                  (transicao manual) ou None.
     """
 
     # =========================================================================
@@ -81,6 +83,14 @@ class PomodoroEngine:
         self._segundos_restantes: int = 0
         self._ciclos_foco: int = 0
         self._pausado: bool = False
+
+        # Proximo estado aguardando inicio manual (transicao manual).
+        # Fica preenchido quando uma sessao termina com transicao_automatica=False.
+        self._proximo_estado_pendente: Optional[PomodoroState] = None
+
+        # Duracao total da sessao em andamento, capturada ao entrar no _loop.
+        # Usada para registrar a sessao mesmo que a config mude no meio do ciclo.
+        self._duracao_sessao_seg: int = 0
 
         # -- Controle de concorrencia asyncio --
         self._task: Optional[asyncio.Task] = None
@@ -110,6 +120,16 @@ class PomodoroEngine:
     def pausado(self) -> bool:
         return self._pausado
 
+    @property
+    def proximo_estado_pendente(self) -> Optional[PomodoroState]:
+        """
+        Proximo estado aguardando inicio manual ou None.
+
+        Preenchido quando uma sessao termina com transicao_automatica=False.
+        A TUI exibe o prompt "Aperte Enter para iniciar ..." com base nele.
+        """
+        return self._proximo_estado_pendente
+
     # =========================================================================
     # API publica de controle
     # =========================================================================
@@ -119,15 +139,22 @@ class PomodoroEngine:
         Inicia o timer.
 
         Se ja houver uma task rodando ela sera cancelada antes.
-        O estado inicial e sempre FOCO (ou o estado fornecido em proximo_estado).
 
         Args:
             proximo_estado: Forca um estado especifico na inicializacao.
-                            None usa FOCO por padrao.
+                            None usa o estado pendente (transicao manual),
+                            se existir; caso contrario comeca em FOCO.
         """
         await self._cancelar_task()
         self._recarregar_config()
+
+        # Transicao manual: se ha um estado pendente, ele e o proximo a rodar.
+        if proximo_estado is None:
+            proximo_estado = self._proximo_estado_pendente
+        self._proximo_estado_pendente = None
+
         estado_inicial = proximo_estado or PomodoroState.FOCO
+        self._segundos_restantes = self._segundos_para_estado(estado_inicial)
         self._mudar_estado(estado_inicial)
         self._task = asyncio.create_task(self._loop())
         logger.debug("Engine iniciada no estado %s", self._state.name)
@@ -153,8 +180,10 @@ class PomodoroEngine:
         Para completamente o timer e vai para PARADO.
 
         A sessao em andamento NAO e registrada no banco (foi interrompida).
+        Qualquer estado pendente de transicao manual tambem e descartado.
         """
         await self._cancelar_task()
+        self._proximo_estado_pendente = None
         self._mudar_estado(PomodoroState.PARADO)
         logger.debug("Timer parado manualmente")
 
@@ -165,9 +194,10 @@ class PomodoroEngine:
         Util quando transicao_automatica=False e o usuario quer iniciar
         o proximo bloco sem esperar.
 
-        Se o timer estiver PARADO, inicia um novo ciclo de FOCO.
-        Se estiver rodando, cancela o ciclo atual, registra como incompleto
-        e avanca para o proximo estado (o mesmo que seria feito ao fim natural).
+        Se o timer estiver PARADO, inicia o estado pendente (se houver)
+        ou um novo ciclo de FOCO.
+        Se estiver rodando, cancela o ciclo atual, sem registrar sessao
+        e avanca para o proximo estado (FOCO -> DESCANSO_CURTO).
         """
         if self._state is PomodoroState.PARADO:
             await self.start()
@@ -177,6 +207,7 @@ class PomodoroEngine:
         await self._cancelar_task()
         proximo = self._calcular_proximo_estado(concluiu=False)
         self._recarregar_config()
+        self._segundos_restantes = self._segundos_para_estado(proximo)
         self._mudar_estado(proximo)
         self._task = asyncio.create_task(self._loop())
         logger.debug("Avancado manualmente para %s", self._state.name)
@@ -191,6 +222,19 @@ class PomodoroEngine:
         respeitando pausas, e lida com o fim de cada sessao.
         """
         duracao_total_seg = self._segundos_para_estado(self._state)
+
+        # Protecao: duracao 0 (config invalida) causaria um loop infinito
+        # de tarefas em transicao automatica.
+        if duracao_total_seg <= 0:
+            logger.warning(
+                "Duracao zero para o estado %s - timer permanece parado.",
+                self._state.name,
+            )
+            self._segundos_restantes = 0
+            self._mudar_estado(PomodoroState.PARADO)
+            return
+
+        self._duracao_sessao_seg = duracao_total_seg
         self._segundos_restantes = duracao_total_seg
 
         # Intervalo de amostragem interno (100ms).
@@ -228,11 +272,25 @@ class PomodoroEngine:
         """
         Executado quando o contador chega a zero naturalmente.
 
-        Registra a sessao no banco, dispara on_session_end,
-        e decide o proximo estado com base na configuracao.
+        Registra a sessao no banco, dispara on_session_end e decide o
+        proximo estado com base na configuracao transicao_automatica:
+
+          - True  -> transiciona direto (FOCO -> DESCANSO e vice-versa)
+                     iniciando a contagem do proximo periodo.
+          - False -> guarda o proximo estado pendente, vai para PARADO
+                     e espera o usuario iniciar o proximo periodo na TUI.
         """
         estado_concluido = self._state
-        seg_totais = self._segundos_para_estado(estado_concluido)
+
+        # Recarrega a config ANTES de decidir: alteracoes feitas no menu de
+        # configuracoes valem ja para a transicao que esta prestes a ocorrer.
+        self._recarregar_config()
+
+        # Duracao capturada na entrada do _loop. Fallback para a config atual
+        # quando _ao_fim_da_sessao e chamada fora do loop (ex: testes).
+        seg_totais = self._duracao_sessao_seg or self._segundos_para_estado(
+            estado_concluido
+        )
         duracao_min = seg_totais // 60 if seg_totais >= 60 else (1 if seg_totais > 0 else 0)
         tipo = STATE_TO_TIPO.get(estado_concluido)
 
@@ -260,15 +318,21 @@ class PomodoroEngine:
         proximo = self._calcular_proximo_estado(concluiu=True)
 
         if self._config.transicao_automatica:
-            self._recarregar_config()
+            # Ja prepara o contador do novo estado (evita frame em 00:00)
+            # e inicia a contagem do descanso/volta ao foco automaticamente.
+            self._segundos_restantes = self._segundos_para_estado(proximo)
             self._mudar_estado(proximo)
             self._task = asyncio.create_task(self._loop())
             logger.debug("Transicao automatica para %s", proximo.name)
         else:
-            # Vai para PARADO e aguarda acao do usuario
+            # Transicao manual: guarda o proximo estado (ex: DESCANSO_CURTO)
+            # e vai para PARADO. A TUI exibe o prompt de inicio manual.
+            self._proximo_estado_pendente = proximo
+            self._segundos_restantes = 0
             self._mudar_estado(PomodoroState.PARADO)
             logger.debug(
-                "Transicao manual: aguardando usuario para iniciar %s", proximo.name
+                "Transicao manual: aguardando o usuario para iniciar %s",
+                proximo.name,
             )
 
     # =========================================================================

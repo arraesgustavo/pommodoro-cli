@@ -1,3 +1,0 @@
-[console_scripts]
-pommo = src.cli:main
-pomocli = src.cli:main

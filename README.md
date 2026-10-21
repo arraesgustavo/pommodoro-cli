@@ -21,6 +21,7 @@ Ferramenta CLI de Pomodoro com estetica hacker/cyberpunk construida em Python e 
 - **Notificacoes Nativas**: Pop-ups no desktop via `notify-send` (libnotify).
 - **Efeitos Sonoros**: Alertas de audio sintetizados tocados via `paplay` (PipeWire / PulseAudio).
 - **Gestao de Projetos**: Criacao, listagem, remocao e vinculacao de projetos no banco SQLite local.
+- **Menu de Configuracoes**: Edicao interativa do tempo de foco, descanso curto/longo e da transicao automatica (manual ou automatica), gravada com UPDATE na tabela `configuracoes`.
 - **Dashboard de Estatisticas**: Painel visual com tempo total de foco, pomodoros estimados vs. concluidos e barras de progresso.
 - **XDG Compliant**: Banco de dados e configuracoes armazenados automaticamente em `~/.local/share/pomocli/pomocli.db`.
 
@@ -85,7 +86,11 @@ Durante a execucao da interface, os seguintes comandos respondem instantaneament
 - **[N]** ou **3**: Avancar manualmente para o proximo ciclo
 - **[J]** ou **4**: Menu de Gestao de Projetos (Adicionar, Listar, Deletar, Selecionar)
 - **[E]** ou **5**: Dashboard de Estatisticas e Relatorios
-- **[M]** ou **Enter**: Menu guiado interativo com prompts
+- **[C]** ou **7**: Menu de Configuracoes (tempos de foco/descanso e transicao automatica)
+- **[M]**: Menu guiado interativo com prompts
+- **Enter**: Abre o menu guiado **ou**, quando o timer esta aguardando o proximo
+  periodo (transicao manual), inicia esse periodo (ex: "Aperte Enter para
+  iniciar o Descanso")
 - **[Q]**: Encerramento limpo e seguro do aplicativo
 
 ===============================================================================

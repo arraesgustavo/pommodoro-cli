@@ -68,16 +68,19 @@ def render_estado(
     total_ciclos: int,
     projeto_nome: str | None,
     pausado: bool,
+    proximo_pendente: PomodoroState | None = None,
 ) -> Panel:
     """
     Renderiza o painel central com o estado atual do timer.
 
     Args:
-        state:        Estado atual do PomodoroEngine.
-        ciclos_foco:  Ciclos de foco ja concluidos neste grupo.
-        total_ciclos: Total de ciclos antes do descanso longo (ex: 4).
-        projeto_nome: Nome do projeto ativo ou None.
-        pausado:      True se o timer estiver pausado.
+        state:             Estado atual do PomodoroEngine.
+        ciclos_foco:       Ciclos de foco ja concluidos neste grupo.
+        total_ciclos:      Total de ciclos antes do descanso longo (ex: 4).
+        projeto_nome:      Nome do projeto ativo ou None.
+        pausado:           True se o timer estiver pausado.
+        proximo_pendente:  Proximo estado aguardando inicio manual
+                           (transicao manual) ou None.
 
     Returns:
         Panel do rich.
@@ -108,6 +111,19 @@ def render_estado(
     tabela = Table.grid(padding=(0, 1))
     tabela.add_row(Align.center(linha_estado))
     tabela.add_row(Align.center(Text(" ")))
+
+    # Prompt de transicao manual: aguardando o usuario iniciar o proximo estado
+    if state is PomodoroState.PARADO and proximo_pendente is not None:
+        nome_pend = LABEL_ESTADO.get(proximo_pendente.name, proximo_pendente.name)
+        nome_pend = nome_pend.replace(">>", "").strip()  # rotulo limpo
+        linha_aguardando = Text(
+            f">> AGUARDANDO // Aperte Enter para iniciar: {nome_pend}",
+            style="blink bold bright_cyan",
+            justify="center",
+        )
+        tabela.add_row(Align.center(linha_aguardando))
+        tabela.add_row(Align.center(Text(" ")))
+
     tabela.add_row(Align.center(linha_ciclos))
     tabela.add_row(Align.center(linha_proj))
 

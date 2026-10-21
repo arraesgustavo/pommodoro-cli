@@ -24,11 +24,13 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
+from rich.table import Table
 from rich.text import Text
 
 from ..alerts.notifications import AlertManager
 from ..database.connection import init_db
 from ..database.repository import (
+    atualizar_configuracao,
     buscar_projeto,
     criar_projeto,
     deletar_projeto,
@@ -37,6 +39,7 @@ from ..database.repository import (
     obter_estatisticas_projetos,
     obter_resumo_estatisticas,
 )
+from ..models.configuracao import Configuracao
 from ..models.projeto import Projeto
 from ..timer.engine import CICLO_FOCO, PomodoroEngine
 from ..timer.states import STATE_LABEL, PomodoroState
@@ -165,6 +168,11 @@ class PomodoroTUI:
     # Configuracao de Callbacks
     # =====================================================================
 
+    @staticmethod
+    def _rotulo_estado(estado: PomodoroState) -> str:
+        """Rotulo amigavel do estado, sem o prefixo '>>' dos labels."""
+        return STATE_LABEL.get(estado, estado.name).replace(">>", "").strip()
+
     def _configurar_callbacks(self) -> None:
         """Registra os callbacks no motor antes de plugar o AlertManager."""
 
@@ -175,6 +183,20 @@ class PomodoroTUI:
         def _on_state_change(novo_estado: PomodoroState) -> None:
             label = STATE_LABEL.get(novo_estado, novo_estado.name)
             self._adicionar_log(f"Estado alterado para: {label}")
+
+            # Transicao manual: sessao terminou e o proximo periodo (ex:
+            # DESCANSO_CURTO) esta pendente de inicio pelo usuario.
+            pendente = self.engine.proximo_estado_pendente
+            if novo_estado is PomodoroState.PARADO and pendente is not None:
+                plabel = self._rotulo_estado(pendente)
+                self._adicionar_log(
+                    f"Aguardando - aperte Enter para iniciar: {plabel}"
+                )
+                dur = self.engine._segundos_para_estado(pendente)
+                if dur > 0:
+                    self.duracao_total = dur
+                return
+
             dur = self.engine._segundos_para_estado(novo_estado)
             if dur > 0:
                 self.duracao_total = dur
@@ -228,6 +250,7 @@ class PomodoroTUI:
                 total_ciclos=CICLO_FOCO,
                 projeto_nome=projeto_nome,
                 pausado=self.engine.pausado,
+                proximo_pendente=self.engine.proximo_estado_pendente,
             ),
             render_timer(
                 segundos_restantes=seg_rest,
@@ -243,9 +266,14 @@ class PomodoroTUI:
     # =====================================================================
 
     async def acao_iniciar(self) -> None:
-        """Inicia o ciclo de Pomodoro."""
+        """Inicia o ciclo de Pomodoro (ou o proximo periodo pendente)."""
         if self.engine.state is PomodoroState.PARADO:
-            self._adicionar_log("Iniciando timer de foco...")
+            pendente = self.engine.proximo_estado_pendente
+            if pendente is not None:
+                plabel = self._rotulo_estado(pendente)
+                self._adicionar_log(f"Iniciando {plabel}...")
+            else:
+                self._adicionar_log("Iniciando timer de foco...")
             await self.engine.start()
         elif self.engine.pausado:
             self._adicionar_log("Retomando timer...")
@@ -456,6 +484,188 @@ class PomodoroTUI:
         term_cbreak.reapply()
         live.start()
 
+    # =====================================================================
+    # Menu de Configuracoes (SQLite)
+    # =====================================================================
+
+    @staticmethod
+    def _duracao_segundos(estado: PomodoroState, config: Configuracao) -> int:
+        """Converte um estado na duracao em segundos conforme a config."""
+        mapa = {
+            PomodoroState.FOCO: config.tempo_foco,
+            PomodoroState.DESCANSO_CURTO: config.tempo_descanso,
+            PomodoroState.DESCANSO_LONGO: config.tempo_descanso_longo,
+        }
+        return mapa.get(estado, 0) * 60
+
+    def _sincronizar_config_view(self) -> None:
+        """
+        Recarrega a configuracao do banco e atualiza os estados visuais
+        da TUI (transicao automatica + duracao mostrada no timer).
+        """
+        config = ler_configuracao()
+        self.transicao_automatica = config.transicao_automatica
+
+        if self.engine.state is not PomodoroState.PARADO:
+            return  # timer rodando: o motor ja usa a config recarregada
+
+        pendente = self.engine.proximo_estado_pendente
+        if pendente is not None:
+            self.duracao_total = self._duracao_segundos(pendente, config)
+        else:
+            self.duracao_total = config.tempo_foco * 60
+
+    def _editar_minutos(self, rotulo: str, campo: str, valor_atual: int) -> None:
+        """
+        Pede um novo valor em minutos, valida e grava no SQLite.
+
+        Args:
+            rotulo:      Texto amigavel do campo (ex: "Tempo de Foco").
+            campo:       Nome da coluna na tabela configuracoes.
+            valor_atual: Valor atual, usado como default do prompt.
+        """
+        bruto = Prompt.ask(
+            f"[bold cyan]{rotulo}[/bold cyan] em minutos (1 a 240)",
+            default=str(valor_atual),
+            console=self.console,
+        ).strip()
+
+        try:
+            valor = int(bruto)
+        except ValueError:
+            self.console.print(
+                "[bright_red]Valor invalido: digite um numero inteiro.[/bright_red]"
+            )
+        else:
+            if 1 <= valor <= 240:
+                atualizar_configuracao(**{campo: valor})
+                self.console.print(
+                    f"[bold bright_green]{rotulo} salvo: {valor} min.[/bold bright_green]"
+                )
+                self._adicionar_log(f"Config: {rotulo} = {valor} min")
+            else:
+                self.console.print(
+                    "[bright_red]Valor fora do intervalo permitido (1 a 240).[/bright_red]"
+                )
+
+        Prompt.ask(
+            "[dim]Pressione Enter para continuar...[/dim]",
+            default="",
+            show_default=False,
+            console=self.console,
+        )
+
+    def menu_configuracoes(
+        self, live: Live, term_cbreak: TerminalCbreak
+    ) -> None:
+        """
+        Pausa o Live display e abre o submenu interativo de Configuracoes.
+
+        Permite editar os tempos de foco/descanso (curto e longo) e
+        alternar a transicao automatica. Todas as alteracoes sao gravadas
+        com UPDATE na tabela configuracoes do SQLite, portanto as proximas
+        sessoes iniciadas ja usam os novos valores.
+        """
+        live.stop()
+        term_cbreak.restore()
+
+        try:
+            while True:
+                config = ler_configuracao()
+
+                self.console.clear()
+                self.console.print(render_header())
+
+                auto_txt = "LIGADA" if config.transicao_automatica else "DESLIGADA"
+                auto_cor = (
+                    "bright_green" if config.transicao_automatica else "bright_red"
+                )
+
+                # Valores atuais lidos do banco
+                tabela_valores = Table.grid(padding=(0, 2))
+                tabela_valores.add_column(style=COR_SECUNDARIA)
+                tabela_valores.add_column(style=f"bold {COR_PRIMARIA}")
+                tabela_valores.add_row("Tempo de Foco (min)", str(config.tempo_foco))
+                tabela_valores.add_row(
+                    "Tempo de Descanso Curto (min)", str(config.tempo_descanso)
+                )
+                tabela_valores.add_row(
+                    "Tempo de Descanso Longo (min)", str(config.tempo_descanso_longo)
+                )
+                tabela_valores.add_row(
+                    "Transicao Automatica",
+                    f"[bold {auto_cor}]{auto_txt}[/bold {auto_cor}]",
+                )
+
+                # Opcoes do submenu
+                opcoes = Text()
+                opcoes.append("  [1] Editar Tempo de Foco\n", style="bold cyan")
+                opcoes.append("  [2] Editar Tempo de Descanso Curto\n", style="bold cyan")
+                opcoes.append("  [3] Editar Tempo de Descanso Longo\n", style="bold cyan")
+                opcoes.append(
+                    "  [4] Alternar Transicao Automatica "
+                    f"(agora: {auto_txt})\n",
+                    style="bold bright_yellow",
+                )
+                opcoes.append("  [V] Voltar ao timer principal\n", style="dim")
+
+                painel = Panel(
+                    Group(tabela_valores, Text(" "), opcoes),
+                    title="[bold bright_green]CONFIGURACOES[/bold bright_green]",
+                    border_style=BORDA_PADRAO,
+                    padding=(1, 2),
+                )
+                self.console.print(painel)
+                self.console.print(
+                    "[dim]Novas sessoes iniciadas ja usam os valores salvos.[/dim]\n"
+                )
+
+                opcao = Prompt.ask(
+                    "[bold cyan]Opcao desejada[/bold cyan]",
+                    choices=["1", "2", "3", "4", "v", ""],
+                    default="v",
+                    show_choices=False,
+                    console=self.console,
+                ).strip().lower()
+
+                if opcao == "1":
+                    self._editar_minutos(
+                        "Tempo de Foco", "tempo_foco", config.tempo_foco
+                    )
+                elif opcao == "2":
+                    self._editar_minutos(
+                        "Tempo de Descanso Curto",
+                        "tempo_descanso",
+                        config.tempo_descanso,
+                    )
+                elif opcao == "3":
+                    self._editar_minutos(
+                        "Tempo de Descanso Longo",
+                        "tempo_descanso_longo",
+                        config.tempo_descanso_longo,
+                    )
+                elif opcao == "4":
+                    novo_valor = not config.transicao_automatica
+                    atualizar_configuracao(transicao_automatica=novo_valor)
+                    estado_txt = "LIGADA" if novo_valor else "DESLIGADA"
+                    self.console.print(
+                        f"[bold bright_green]Transicao automatica {estado_txt}.[/bold bright_green]"
+                    )
+                    self._adicionar_log(f"Config: transicao automatica {estado_txt}")
+                    Prompt.ask(
+                        "[dim]Pressione Enter para continuar...[/dim]",
+                        default="",
+                        show_default=False,
+                        console=self.console,
+                    )
+                elif opcao in ("v", ""):
+                    break
+        finally:
+            # Aplica as alteracoes na tela principal antes de voltar
+            self._sincronizar_config_view()
+            term_cbreak.reapply()
+            live.start()
+
     async def menu_interativo(
         self, live: Live, term_cbreak: TerminalCbreak
     ) -> None:
@@ -469,12 +679,23 @@ class PomodoroTUI:
         self.console.print(render_header())
 
         menu_texto = Text()
+
+        # Prompt de transicao manual (sessao terminou, aguardando o usuario)
+        pendente = self.engine.proximo_estado_pendente
+        if self.engine.state is PomodoroState.PARADO and pendente is not None:
+            plabel = self._rotulo_estado(pendente)
+            menu_texto.append(
+                f"\n  [Enter] Iniciar proximo periodo: {plabel}\n",
+                style="blink bold bright_cyan",
+            )
+
         menu_texto.append("\n  [1 / S] Iniciar timer\n", style="bold bright_green")
         menu_texto.append("  [2 / P] Pausar / Retomar\n", style="bold bright_yellow")
         menu_texto.append("  [3 / N] Avancar para proximo ciclo\n", style="bold cyan")
         menu_texto.append("  [4 / J] Gestao de Projetos (Listar / Criar / Deletar / Ativar)\n", style="bold bright_green")
         menu_texto.append("  [5 / E] Dashboard de Estatisticas\n", style="bold cyan")
         menu_texto.append("  [6 / Q] Sair do pommo\n", style="bold bright_red")
+        menu_texto.append("  [7 / C] Configuracoes (tempos e transicao)\n", style="bold bright_yellow")
         menu_texto.append("  [V]     Voltar ao painel\n", style="dim")
 
         painel_menu = Panel(
@@ -487,7 +708,7 @@ class PomodoroTUI:
 
         opcao = Prompt.ask(
             "[bold cyan]Selecione a opcao desejada[/bold cyan]",
-            choices=["1", "2", "3", "4", "5", "6", "s", "p", "n", "j", "e", "q", "v", ""],
+            choices=["1", "2", "3", "4", "5", "6", "7", "s", "p", "n", "j", "e", "c", "q", "v", ""],
             default="v",
             show_choices=False,
             console=self.console,
@@ -504,6 +725,9 @@ class PomodoroTUI:
             return
         elif opcao in ("5", "e"):
             self.tela_estatisticas(live, term_cbreak)
+            return
+        elif opcao in ("7", "c"):
+            self.menu_configuracoes(live, term_cbreak)
             return
         elif opcao in ("6", "q"):
             self.running = False
@@ -524,10 +748,8 @@ class PomodoroTUI:
         # Garante inicializacao do banco
         init_db()
 
-        # Carrega configuracoes atuais
-        config = ler_configuracao()
-        self.transicao_automatica = config.transicao_automatica
-        self.duracao_total = config.tempo_foco * 60
+        # Carrega configuracoes atuais do SQLite para a TUI
+        self._sincronizar_config_view()
 
         self._adicionar_log("Terminal cyberpunk ativado. Pronto para focar.")
 
@@ -543,7 +765,17 @@ class PomodoroTUI:
                     # Captura tecla se houver entrada disponivel
                     key = _ler_tecla_nao_bloqueante()
 
-                    if key == "s":
+                    # Transicao manual aguardando: Enter inicia o proximo
+                    # periodo (ex: Descanso) em vez de abrir o menu.
+                    pendente = self.engine.proximo_estado_pendente
+                    aguardando = (
+                        self.engine.state is PomodoroState.PARADO
+                        and pendente is not None
+                    )
+
+                    if key in ("\r", "\n") and aguardando:
+                        await self.acao_iniciar()
+                    elif key == "s":
                         await self.acao_iniciar()
                     elif key == "p":
                         await self.acao_pausar_retomar()
@@ -553,6 +785,8 @@ class PomodoroTUI:
                         self.menu_gestao_projetos(live, term_cbreak)
                     elif key == "e":
                         self.tela_estatisticas(live, term_cbreak)
+                    elif key == "c":
+                        self.menu_configuracoes(live, term_cbreak)
                     elif key in ("m", "\r", "\n", ":"):
                         await self.menu_interativo(live, term_cbreak)
                     elif key in ("q", "\x03"):  # 'q' ou Ctrl+C

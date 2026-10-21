@@ -76,6 +76,7 @@ MENU_OPCOES = {
     "n": ("[N]", "proximo"),
     "j": ("[J]", "projetos"),
     "e": ("[E]", "stats"),
+    "c": ("[C]", "config"),
     "m": ("[M]", "menu/prompt"),
     "q": ("[Q]", "sair"),
 }
